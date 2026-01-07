@@ -8,6 +8,10 @@ Stakeholders can observe the last 12 months portfolio movement for better compar
 Some sheets of the report show the summary of consumer loan disbursements and repayments.
 
 
+# Type of Customers
+Physical
+
+
 # Data Model
 Dim Tables : Loan_Dim_By_Date
 Fact Tables : Loan_Fact, View_IFRS_Report, Loan_Actions
