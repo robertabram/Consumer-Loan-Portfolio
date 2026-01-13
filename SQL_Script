@@ -1,0 +1,88 @@
+<--Portfolio Movement for the last twelve months-->
+DROP TABLE IF EXISTS #LO, #DIM,#FACT, #IFR
+DECLARE @ONE_YEAR_BACK_DATE date = DATEFROMPARTS(YEAR(cast(getdate() as date))-1, MONTH(cast(getdate() as date)),1), 
+		@PREVIOUS_MONTH_LAST_DATE date = EOMONTH(DATEADD(MONTH,-1, CAST(GETDATE()-1 as date)));
+
+select l.AGREEMENT_CODE
+		, PRESENT_VALUE
+		, AGR_SUM
+		, NOTE2
+		, DATE_SIGNED
+		, BRANCH_NAME_EN
+		, FACT_DATE
+		, EOMONTH(FACT_DATE) END_OF_MONTH
+		INTO #LO
+from LOAN_DIM_ByDATE(@PREVIOUS_MONTH_LAST_DATE) l
+join LOAN_FACT f on l.AGREEMENT_CODE = f.AGREEMENT_CODE
+join GENERAL.dbo.BRANCHES b on l.BRANCH = b.CODE
+where (NOTE2 in ('6','5G') OR NOTE2 like '4G%') and 
+		f.FACT_DATE between @ONE_YEAR_BACK_DATE and @PREVIOUS_MONTH_LAST_DATE
+
+
+
+select o.AGREEMENT_CODE
+		, NOTE2
+		, DATE_SIGNED
+		, BRANCH_NAME_EN
+		INTO #DIM
+from OVERDRAFT_DIM_ByDATE(@PREVIOUS_MONTH_LAST_DATE) o
+join GENERAL.dbo.BRANCHES b on o.BRANCH = b.CODE
+where NOTE2 in ('2VG','2OG') 
+
+
+
+select AGREEMENT_CODE
+		, PRESENT_VALUE
+		, AGR_SUM
+		, FACT_DATE
+		, EOMONTH(FACT_DATE) END_OF_MONTH
+		INTO #FACT
+from OVERDRAFT_FACT
+where FACT_DATE between @ONE_YEAR_BACK_DATE and @PREVIOUS_MONTH_LAST_DATE
+
+
+SELECT [Պայմանագրի N]
+		, [IFRS WO status]
+		, FINAL_STAGE
+		, [IFRS Gross amount final]
+		, ReportDate
+INTO #IFR
+	FROM RM.dbo.view_IFRS_CreditReport
+	WHERE ReportDate between @ONE_YEAR_BACK_DATE and @PREVIOUS_MONTH_LAST_DATE
+	--(select MAX(ReportDate) from RM.dbo.view_IFRS_CreditReport) 
+							and ([Նշում 2] IN ('2VG', '2OG','5G','6') OR [Նշում 2] like '4G%')
+
+
+
+
+
+
+select l.AGREEMENT_CODE
+		, PRESENT_VALUE
+		, AGR_SUM
+		, case when NOTE2 = '6' then 'Investment loan' 
+				when NOTE2 = '5G' OR NOTE2 like '4G%' then 'Consumer loan with scheduled repayment' end as LOAN_NAME
+		, DATE_SIGNED
+		, BRANCH_NAME_EN
+		, FACT_DATE
+		, ifr.*
+from #LO l
+left join #IFR ifr on l.AGREEMENT_CODE = ifr.[Պայմանագրի N] and l.END_OF_MONTH = ifr.ReportDate
+where [IFRS WO status] = 'No' or [IFRS WO status] IS NULL
+
+UNION
+
+select f.AGREEMENT_CODE
+		, PRESENT_VALUE
+		, AGR_SUM
+		, case when NOTE2 = '2OG' OR NOTE2 like '2VG%' then 'Secured credit line/Overdraft' end as LOAN_NAME
+		, DATE_SIGNED
+		, BRANCH_NAME_EN
+		, FACT_DATE
+		, ifr.*
+from #DIM d
+join #FACT f on d.AGREEMENT_CODE = f.AGREEMENT_CODE
+left join #IFR ifr on ifr.[Պայմանագրի N] = f.AGREEMENT_CODE and f.END_OF_MONTH = ifr.ReportDate
+where [IFRS WO status] = 'No' or [IFRS WO status] IS NULL
+
+DROP TABLE IF EXISTS #LO, #DIM,#FACT, #IFR
