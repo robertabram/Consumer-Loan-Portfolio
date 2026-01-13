@@ -86,3 +86,106 @@ left join #IFR ifr on ifr.[Պայմանագրի N] = f.AGREEMENT_CODE and f.END_
 where [IFRS WO status] = 'No' or [IFRS WO status] IS NULL
 
 DROP TABLE IF EXISTS #LO, #DIM,#FACT, #IFR
+
+
+<--Effect of Exchange Rate-->
+DROP TABLE IF EXISTS #LO, #DIM,#FACT, #IFR, #EXC
+DECLARE @DATE date = CAST(GETDATE()-1 as date), @FACT_DATE date = CAST(GETDATE()-1 as date), @CURRENT_EXC_DATE date = CAST(GETDATE()-1 as date), @PREVIOUS_EXC_DATE date = CAST(GETDATE()-2 as date)
+--@ONE_YEAR_BACK_DATE date = DATEFROMPARTS(YEAR(cast(getdate() as date))-1, MONTH(cast(getdate() as date)),1), 
+--@PREVIOUS_MONTH_LAST_DATE date = EOMONTH(DATEFROMPARTS(YEAR(cast(getdate() as date)), MONTH(cast(getdate() as date))-1,1));
+
+select l.AGREEMENT_CODE
+		, CURRENCY
+		, PRESENT_VALUE
+		, AGR_SUM
+		, NOTE2
+		, DATE_SIGNED
+		, BRANCH_NAME_EN
+		, FACT_DATE
+		INTO #LO
+from LOAN_DIM_ByDATE(@DATE) l
+join LOAN_FACT f on l.AGREEMENT_CODE = f.AGREEMENT_CODE
+join GENERAL.dbo.BRANCHES b on l.BRANCH = b.CODE
+where (NOTE2 in ('6','5G') OR NOTE2 like '4G%') and 
+		f.FACT_DATE = @FACT_DATE
+
+
+
+select o.AGREEMENT_CODE
+		, CURRENCY
+		, NOTE2
+		, DATE_SIGNED
+		, BRANCH_NAME_EN
+		INTO #DIM
+from OVERDRAFT_DIM_ByDATE(@DATE) o
+join GENERAL.dbo.BRANCHES b on o.BRANCH = b.CODE
+where NOTE2 in ('2VG','2OG') 
+
+
+
+select AGREEMENT_CODE
+		, PRESENT_VALUE
+		, AGR_SUM
+		, FACT_DATE
+		INTO #FACT
+from OVERDRAFT_FACT
+where FACT_DATE = @FACT_DATE
+
+
+SELECT [Պայմանագրի N]
+		, [IFRS WO status]
+		, FINAL_STAGE
+		, [IFRS Gross amount final]
+		, ReportDate
+INTO #IFR
+	FROM RM.dbo.view_IFRS_CreditReport
+	WHERE ReportDate = (select MAX(ReportDate) from RM.dbo.view_IFRS_CreditReport) 
+							and ([Նշում 2] IN ('2VG', '2OG','5G','6') OR [Նշում 2] like '4G%')
+
+
+select CURR_CODE
+		, VALUE
+		, FACT_DATE
+		INTO #EXC
+from GENERAL.dbo.view_CB_EXCHANGE_RATES
+where ISO_CODE in ('USD','EUR') and FACT_DATE between @PREVIOUS_EXC_DATE and @CURRENT_EXC_DATE;
+
+------------------------------------------------------------------------------------------
+
+WITH portf AS(
+select CURRENCY, SUM(PRESENT_VALUE) PRESENT_VALUE
+from (
+select CURRENCY
+		, PRESENT_VALUE
+from #LO l
+left join #IFR ifr on l.AGREEMENT_CODE = ifr.[Պայմանագրի N]
+where [IFRS WO status] = 'No' or [IFRS WO status] IS NULL
+
+UNION
+
+select CURRENCY
+		, PRESENT_VALUE
+from #DIM d
+join #FACT f on d.AGREEMENT_CODE = f.AGREEMENT_CODE
+left join #IFR ifr on ifr.[Պայմանագրի N] = f.AGREEMENT_CODE
+where [IFRS WO status] = 'No' or [IFRS WO status] IS NULL
+) p
+where CURRENCY <> '000'
+group by CURRENCY)
+
+select *
+		, PRESENT_VALUE_EXC_DIFF * VALUE EXCHANGE_RATE_INCREASE_DECREASE
+from (
+select CURR_CODE
+		, VALUE
+		, PRESENT_VALUE
+		, PRESENT_VALUE / VALUE PRESENT_VALUE_EXC
+		, LEAD(PRESENT_VALUE / VALUE) OVER(PARTITION BY CURR_CODE ORDER BY FACT_DATE) NEXT_DATE_PRESENT_VALUE_EXC
+		, PRESENT_VALUE / VALUE - LEAD(PRESENT_VALUE / VALUE) OVER(PARTITION BY CURR_CODE ORDER BY FACT_DATE) PRESENT_VALUE_EXC_DIFF
+		, FACT_DATE
+from portf p
+join #EXC ex on p.CURRENCY = ex.CURR_CODE
+) t
+where PRESENT_VALUE_EXC_DIFF IS NOT NULL
+
+DROP TABLE IF EXISTS #LO, #DIM,#FACT, #IFR, #EXC
